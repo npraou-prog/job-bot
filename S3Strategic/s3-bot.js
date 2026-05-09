@@ -163,7 +163,7 @@ async function scrapeJobListings(page) {
     await page.waitForTimeout(2500);
 
     // Click "Load More" up to 4 times
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 6; i++) {
       const loadMoreClicked = await page.evaluate(() => {
         const btn = Array.from(document.querySelectorAll('button, a')).find(el =>
           /load more|show more|view more/i.test((el.textContent || '').trim()) && el.offsetParent !== null
@@ -173,7 +173,7 @@ async function scrapeJobListings(page) {
       }).catch(() => false);
 
       if (!loadMoreClicked) break;
-      log(`   Clicked Load More (${i + 1}/4)`);
+      log(`   Clicked Load More (${i + 1}/6)`);
       await page.waitForTimeout(2000);
     }
 
