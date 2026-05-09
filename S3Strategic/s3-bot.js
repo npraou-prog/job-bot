@@ -256,38 +256,57 @@ async function applyToJob(workerId, context, job) {
       if (applyClicked) await jobPage.waitForTimeout(2500);
     }
 
-    // Fill first name
-    await fillField(jobPage, [
-      'input[name="first_name"]', 'input[name*="first" i]',
-      'input[id*="first" i]', 'input[placeholder*="first" i]',
-      '#input_1_3', '#input_1_1', '#input_2_3', '#input_2_1',
-    ], USER_FIRST_NAME, 'First Name');
+    // Fill by label text — finds the <label> whose text matches, then fills its associated input
+    await jobPage.evaluate(({ firstName, lastName, email }) => {
+      function fillByLabel(labelRe, value) {
+        for (const label of document.querySelectorAll('label')) {
+          if (!labelRe.test(label.textContent.trim())) continue;
+          const input = label.htmlFor
+            ? document.getElementById(label.htmlFor)
+            : label.querySelector('input, textarea');
+          if (input && input.type !== 'file' && input.type !== 'checkbox' && input.type !== 'radio') {
+            input.focus(); input.value = value;
+            input.dispatchEvent(new Event('input',  { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          }
+        }
+        return false;
+      }
 
-    // Fill last name
-    const lastFilled = await fillField(jobPage, [
-      'input[name="last_name"]', 'input[name*="last" i]',
-      'input[id*="last" i]', 'input[placeholder*="last" i]',
-      '#input_1_4', '#input_1_2', '#input_2_4', '#input_2_2',
-    ], USER_LAST_NAME, 'Last Name');
+      // Try label-based fill
+      const filledFirst = fillByLabel(/^first\s*name/i, firstName);
+      const filledLast  = fillByLabel(/^last\s*name/i,  lastName);
+      const filledEmail = fillByLabel(/^email/i,         email);
 
-    // Positional fallback for last name
-    if (!lastFilled) {
-      await jobPage.evaluate((ln) => {
+      // Positional fallback: fill visible text inputs in order (first, last)
+      if (!filledFirst || !filledLast) {
         const inputs = Array.from(document.querySelectorAll('input[type="text"], input:not([type])'))
           .filter(el => el.offsetParent !== null);
-        if (inputs[1]) {
-          inputs[1].focus(); inputs[1].value = ln;
+        if (!filledFirst && inputs[0]) {
+          inputs[0].focus(); inputs[0].value = firstName;
+          inputs[0].dispatchEvent(new Event('input',  { bubbles: true }));
+          inputs[0].dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        if (!filledLast && inputs[1]) {
+          inputs[1].focus(); inputs[1].value = lastName;
           inputs[1].dispatchEvent(new Event('input',  { bubbles: true }));
           inputs[1].dispatchEvent(new Event('change', { bubbles: true }));
         }
-      }, USER_LAST_NAME).catch(() => {});
-    }
+      }
 
-    // Fill email
-    await fillField(jobPage, [
-      'input[type="email"]', 'input[name*="email" i]',
-      'input[id*="email" i]', 'input[placeholder*="email" i]',
-    ], USER_EMAIL, 'Email');
+      // Email fallback
+      if (!filledEmail) {
+        const emailEl = document.querySelector('input[type="email"], input[name*="email" i], input[id*="email" i]');
+        if (emailEl) {
+          emailEl.focus(); emailEl.value = email;
+          emailEl.dispatchEvent(new Event('input',  { bubbles: true }));
+          emailEl.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }
+    }, { firstName: USER_FIRST_NAME, lastName: USER_LAST_NAME, email: USER_EMAIL });
+
+    log(`[${workerId}]    Name + email filled`);
 
     // Resume upload
     if (fs.existsSync(RESUME_PATH)) {
