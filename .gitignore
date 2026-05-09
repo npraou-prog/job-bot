@@ -1,0 +1,18 @@
+# Runtime logs and session data
+applied_jobs*.txt
+applied_ids*.txt
+failed_jobs*.txt
+scanned_jobs*.txt
+report_*.txt
+cron.log
+session_notes.txt
+master_jobs.json
+
+# graphify output
+graphify-out/
+
+# Node
+node_modules/
+
+# macOS
+.DS_Store
