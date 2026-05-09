@@ -81,6 +81,14 @@ function writeResult(job, result) {
   fs.appendFileSync(result === 'APPLIED' ? APPLIED_FILE : FAILED_FILE, line);
 }
 
+function writeScanned(jobs) {
+  ensureDir(SCANNED_FILE);
+  const ts   = new Date().toLocaleString('en-US', { hour12: false });
+  const header = `\n── Scan at ${ts} (${jobs.length} listings) ──\n`;
+  const lines  = jobs.map(j => `  [${j.id}] ${j.title || '(no title)'} | posted: ${j.posted || '?'} | ${j.url}`).join('\n');
+  fs.appendFileSync(SCANNED_FILE, header + lines + '\n');
+}
+
 // ─── DATE FILTER ──────────────────────────────────────────────────────────────
 
 function isWithin1Day(postedText) {
@@ -455,6 +463,7 @@ async function runBot(durationMinutes) {
       const scanPage = await context.newPage();
       const allJobs  = await scrapeJobListings(scanPage);
       await scanPage.close().catch(() => {});
+      writeScanned(allJobs);
 
       const queue = allJobs.filter(j => {
         if (appliedIds.has(j.id)) return false;
