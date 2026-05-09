@@ -40,4 +40,9 @@ end tell
 tell application "Terminal"
     do script "cd '${DIR}/Collabera' && node collabera-bot.js 240"
 end tell
+
+-- S3Strategic bot window
+tell application "Terminal"
+    do script "cd '${DIR}/S3Strategic' && node s3-bot.js 240"
+end tell
 EOF
