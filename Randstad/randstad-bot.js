@@ -63,7 +63,13 @@ I would welcome the opportunity to discuss how my skills can contribute to your 
 Best regards,
 Nikhil Premachandra Rao`;
 
-// Search keyword slugs → /jobs/q-{slug}/
+// Search URLs to scan
+const SCAN_URLS = [
+  'https://www.randstadusa.com/jobs/q-data-sceince/',
+  'https://www.randstadusa.com/jobs/q-ai/',
+];
+
+// Search keyword slugs → /jobs/q-{slug}/ (used by run mode)
 const SEARCH_QUERIES = [
   'data-scientist',
   'machine-learning-engineer',
@@ -147,13 +153,13 @@ function isWithin24Hours(postedText) {
   if (/\b([3-9]|\d{2,})\s+days?\s+ago\b/i.test(t)) return false;
   if (t.includes('week') || t.includes('month') || t.includes('year')) return false;
 
-  // Absolute date strings "April 19, 2026" etc.
+  // Absolute date strings "May 8, 2026" etc.
   const m = t.match(/([a-z]+ \d{1,2},?\s*\d{4})/i);
   if (m) {
     const parsed = new Date(m[1]);
     if (!isNaN(parsed.getTime())) {
-      const diffHours = (Date.now() - parsed.getTime()) / 3600000;
-      return diffHours <= 48;
+      const diffDays = Math.floor((Date.now() - parsed.getTime()) / 86400000);
+      return diffDays <= 1; // today or yesterday
     }
   }
   return true; // unknown format — let through
@@ -1078,11 +1084,125 @@ async function runBot(durationMinutes) {
   console.log('='.repeat(62) + '\n');
 }
 
+// ─── SCAN MODE ────────────────────────────────────────────────────────────────
+
+async function scanMode() {
+  console.log('\n' + '='.repeat(70));
+  console.log('Randstad — SCAN MODE (no login, no apply)');
+  console.log('URLs : ' + SCAN_URLS.join('\n       '));
+  console.log('Pages: up to 6 per URL');
+  console.log('='.repeat(70) + '\n');
+
+  const browser = await chromium.launch({
+    headless: false,
+    args: ['--disable-blink-features=AutomationControlled', '--start-maximized'],
+  });
+  const context = await browser.newContext({
+    viewport: null,
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  });
+  const page = await context.newPage();
+
+  const allJobs = [];
+  const seen    = new Set();
+
+  for (const baseUrl of SCAN_URLS) {
+    console.log(`\n── Scanning: ${baseUrl}`);
+
+    for (let pageNum = 1; pageNum <= 6; pageNum++) {
+      const url = pageNum === 1
+        ? baseUrl
+        : baseUrl.replace(/\/?$/, '') + `/page-${pageNum}/`;
+
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
+        await page.waitForTimeout(2500);
+
+        const noResults = await page.evaluate(() => {
+          const t = (document.body.innerText || '').toLowerCase();
+          return /no jobs found|0 jobs|no results found|sorry, no/.test(t);
+        }).catch(() => false);
+
+        if (noResults) {
+          console.log(`   Page ${pageNum}: no results — done`);
+          break;
+        }
+
+        const jobs = await extractJobsFromPage(page);
+        if (jobs.length === 0) {
+          console.log(`   Page ${pageNum}: 0 cards — done`);
+          break;
+        }
+
+        let newCount = 0;
+        for (const job of jobs) {
+          if (seen.has(job.id)) continue;
+          seen.add(job.id);
+          allJobs.push(job);
+          newCount++;
+        }
+
+        console.log(`   Page ${pageNum}: ${jobs.length} cards | ${newCount} new`);
+        if (newCount === 0) break;
+
+      } catch (e) {
+        console.log(`   Page ${pageNum}: error — ${e.message}`);
+        break;
+      }
+    }
+  }
+
+  await page.close().catch(() => {});
+  await context.close().catch(() => {});
+  await browser.close().catch(() => {});
+
+  // ── ALL SCRAPED — simple numbered list ────────────────────────────────────
+  console.log('\n' + '='.repeat(70));
+  console.log(`ALL SCRAPED JOBS — ${allJobs.length} total`);
+  console.log('='.repeat(70));
+  allJobs.forEach((j, i) => {
+    const date  = j.posted ? `[${j.posted}]` : '[no date]';
+    const title = j.title  || '(no title)';
+    console.log(`${String(i + 1).padStart(3)}. ${date.padEnd(20)} ${title}`);
+    console.log(`      ${j.url}`);
+  });
+
+  // ── RELEVANT — title match + within 1 day, tabular ───────────────────────
+  const relevant = allJobs.filter(j =>
+    TITLE_FILTER.test(j.title) && isWithin24Hours(j.posted)
+  );
+
+  console.log('\n' + '='.repeat(70));
+  console.log(`RELEVANT JOBS — title match + posted within 1 day — ${relevant.length} found`);
+  console.log('='.repeat(70));
+
+  if (relevant.length === 0) {
+    console.log('  (none)\n');
+  } else {
+    const T = 42; // title col width
+    const D = 14; // date col width
+    const header = `${'#'.padEnd(4)} ${'Title'.padEnd(T)} ${'Posted'.padEnd(D)} URL`;
+    console.log(header);
+    console.log('-'.repeat(header.length + 20));
+    relevant.forEach((j, i) => {
+      const num    = String(i + 1).padEnd(4);
+      const title  = (j.title || '(no title)').slice(0, T).padEnd(T);
+      const posted = (j.posted || '?').slice(0, D).padEnd(D);
+      console.log(`${num} ${title} ${posted} ${j.url}`);
+    });
+    console.log('');
+  }
+
+  console.log(`\nSummary: ${allJobs.length} scraped | ${relevant.length} relevant\n`);
+}
+
 // ─── ENTRY POINT ──────────────────────────────────────────────────────────────
 
 const arg = process.argv[2];
 
-if (arg === 'login') {
+if (arg === 'scan') {
+  scanMode().catch(e => { console.error(e.stack || e.message); process.exit(1); });
+} else if (arg === 'login') {
   loginMode().catch(e => { console.error(e.stack || e.message); process.exit(1); });
 } else if (arg === 'test') {
   MAX_JOBS = 1;
