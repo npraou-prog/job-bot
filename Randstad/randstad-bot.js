@@ -190,38 +190,27 @@ async function extractJobsFromPage(page) {
       const url      = `${baseUrl}/jobs/${sectorId}/${jobId}/${slug}/`;
       if (map[jobId]) continue;
 
-      // Walk up to card — broad selector, fall back to closest div
-      const card = a.closest(
-        'article, li, [class*="job"], [class*="result"], [class*="card"], ' +
-        '[class*="listing"], [class*="vacancy"], section, div[data-job-id], div[data-id]'
-      ) || a.closest('div') || a.parentElement;
+      // Card is <li class="cards__item"> — walk up to it
+      const card = a.closest('li.cards__item, li[class*="cards__item"]')
+        || a.closest('li')
+        || a.closest('article');
 
-      // Title
+      // Title from <h3 class="cards__title">
       let title = '';
       if (card) {
-        const heading = card.querySelector('h1, h2, h3, h4, [class*="title"], [class*="name"]');
+        const heading = card.querySelector('.cards__title, h3, h2, h1');
         if (heading) title = heading.textContent.trim();
       }
       if (!title) title = a.textContent.trim();
 
-      // Date — Randstad uses "posted may 6, 2026" in card text
+      // Date — card innerText contains "posted april 23, 2026"
       let posted = '';
       const cardText = card ? (card.innerText || '') : '';
 
-      // 1. Try dedicated date element
-      if (card) {
-        const dateEl = card.querySelector('[class*="date"], [class*="posted"], time, [datetime]');
-        if (dateEl) posted = dateEl.getAttribute('datetime') || dateEl.textContent.trim();
-      }
-
-      // 2. "posted [month] [day], [year]" — extract just the date part
-      if (!posted) {
-        const pm = cardText.match(/posted\s+([a-z]+\s+\d{1,2},?\s*\d{4})/i);
-        if (pm) posted = pm[1];
-      }
-
-      // 3. Relative time strings
-      if (!posted) {
+      const pm = cardText.match(/posted\s+([a-z]+\s+\d{1,2},?\s*\d{4})/i);
+      if (pm) {
+        posted = pm[1]; // "april 23, 2026"
+      } else {
         const rm = cardText.match(/(\d+\s+(?:minute|hour|day|week|month)s?\s+ago|today|just now|yesterday)/i);
         if (rm) posted = rm[0];
       }
@@ -1200,7 +1189,51 @@ async function scanMode() {
 
 const arg = process.argv[2];
 
-if (arg === 'scan') {
+if (arg === 'probe') {
+  (async () => {
+    const browser = await chromium.launch({ headless: false, args: ['--disable-blink-features=AutomationControlled', '--start-maximized'] });
+    const context = await browser.newContext({ viewport: null });
+    const page    = await context.newPage();
+    await page.goto(SCAN_URLS[0], { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
+    await page.waitForTimeout(3000);
+
+    const info = await page.evaluate(() => {
+      // Find the first job link
+      const links = Array.from(document.querySelectorAll('a[href*="/jobs/"]'));
+      const jobLink = links.find(a => /\/jobs\/\d+\/\d+\//.test(a.href));
+      if (!jobLink) return { error: 'no job link found' };
+
+      const result = {
+        linkText: jobLink.textContent.trim(),
+        linkHref: jobLink.href,
+        ancestors: [],
+      };
+
+      // Walk up 8 levels, log tag + classes + snippet of innerText
+      let node = jobLink;
+      for (let i = 0; i < 8; i++) {
+        node = node.parentElement;
+        if (!node) break;
+        result.ancestors.push({
+          level: i + 1,
+          tag: node.tagName,
+          className: (node.className || '').slice(0, 80),
+          id: node.id || '',
+          textSnippet: (node.innerText || '').slice(0, 200).replace(/\n/g, ' | '),
+        });
+      }
+      return result;
+    });
+
+    console.log('\n[probe] First job link:', info.linkText, '→', info.linkHref);
+    console.log('\n[probe] Ancestor walk-up:');
+    (info.ancestors || []).forEach(a =>
+      console.log(`  +${a.level} <${a.tag}> class="${a.className}" id="${a.id}"\n      text: "${a.textSnippet}"`)
+    );
+
+    await browser.close();
+  })().catch(e => { console.error(e.stack || e.message); process.exit(1); });
+} else if (arg === 'scan') {
   scanMode().catch(e => { console.error(e.stack || e.message); process.exit(1); });
 } else if (arg === 'login') {
   loginMode().catch(e => { console.error(e.stack || e.message); process.exit(1); });
