@@ -38,9 +38,9 @@ const MAX_RETRIES    = 2;
 
 // User details
 const USER_FIRST     = 'Nikhil';
-const USER_LAST      = 'Premachandra rao';
-const USER_FULL      = 'Nikhil Premachandra rao';
-const USER_EMAIL     = 'Npraou@gmail.com';
+const USER_LAST      = 'Premachandra Rao';
+const USER_FULL      = 'Nikhil Premachandra Rao';
+const USER_EMAIL     = 'npraou@gmail.com';
 const RESUME_PATH    = (() => {
   const candidates = [
     path.join(__dirname, 'resume.pdf'),
@@ -229,53 +229,35 @@ async function scanForJobs(page, appliedJobs) {
   const allSeen  = [];
   const seenIds  = new Set();
 
-  for (const query of SEARCH_QUERIES) {
+  for (const baseSearchUrl of SCAN_URLS) {
     if (_shouldStop) break;
 
-    const keyword = query.replace(/-/g, ' ');
-    console.log(`\n[S] Scanning: "${keyword}"`);
-
-    // Randstad paginates via ?start=N (0-based, 25 per page) or path /page-N/
-    // Try up to 4 pages per keyword (100 jobs max per keyword)
-    let pageNum    = 1;
-    let totalNew   = 0;
-    let totalOld   = 0;
+    console.log(`\n[S] Scanning: ${baseSearchUrl}`);
+    let pageNum  = 1;
+    let totalNew = 0;
+    let totalOld = 0;
 
     while (true) {
-      // Build paginated URL: /jobs/q-{keyword}/ for page 1, /jobs/q-{keyword}/page-2/ etc.
       const searchUrl = pageNum === 1
-        ? `${BASE_URL}/jobs/q-${query}/`
-        : `${BASE_URL}/jobs/q-${query}/page-${pageNum}/`;
+        ? baseSearchUrl
+        : baseSearchUrl.replace(/\/?$/, '') + `/page-${pageNum}/`;
 
       try {
         await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
         await page.waitForTimeout(2500);
 
-        // Check for no results
         const noJobs = await page.evaluate(() => {
-          const body = (document.body && document.body.innerText
-            ? document.body.innerText.toLowerCase()
-            : '');
-          return (
-            body.includes('no jobs found') ||
-            body.includes('no results found') ||
-            body.includes('0 jobs') ||
-            body.includes('sorry, no') ||
-            body.includes('there are no job')
-          );
+          const body = (document.body.innerText || '').toLowerCase();
+          return /no jobs found|no results found|0 jobs|sorry, no|there are no job/.test(body);
         }).catch(() => false);
 
         if (noJobs) {
-          if (pageNum === 1) console.log(`   [x] No results for "${keyword}" — skipping`);
-          else console.log(`   [x] Page ${pageNum}: end of results`);
+          console.log(`   Page ${pageNum}: end of results`);
           break;
         }
 
         const jobs = await extractJobsFromPage(page);
-        if (jobs.length === 0) {
-          if (pageNum > 1) console.log(`   [x] Page ${pageNum}: no job cards — stopping`);
-          break;
-        }
+        if (jobs.length === 0) { break; }
 
         const newOnPage = jobs.filter(j => !seenIds.has(j.id));
         if (pageNum > 1 && newOnPage.length === 0) break;
@@ -285,31 +267,16 @@ async function scanForJobs(page, appliedJobs) {
           seenIds.add(job.id);
           allSeen.push(job);
 
-          if (appliedJobs.has(job.id)) {
-            console.log(`   [dup] Already applied — skip ${job.id}`);
-            continue;
-          }
-
-          // Title filter
-          if (!TITLE_FILTER.test(job.title)) {
-            console.log(`   [title] Filtered out: "${job.title}"`);
-            continue;
-          }
-
-          // Date filter
-          if (!isWithin24Hours(job.posted)) {
-            totalOld++;
-            continue;
-          }
+          if (appliedJobs.has(job.id)) { console.log(`   [dup] Already applied — skip ${job.id}`); continue; }
+          if (!TITLE_FILTER.test(job.title)) { console.log(`   [title] Filtered: "${job.title}"`); continue; }
+          if (!isWithin24Hours(job.posted)) { totalOld++; continue; }
 
           toApply.push({ id: job.id, url: job.url, title: job.title || job.id, posted: job.posted });
           totalNew++;
         }
 
-        console.log(`   Page ${pageNum}: ${jobs.length} cards | ${newOnPage.length} new | queued so far: ${totalNew}`);
-
-        // Stop paginating after 4 pages per keyword — most fresh jobs appear on page 1
-        if (pageNum >= 4) break;
+        console.log(`   Page ${pageNum}: ${jobs.length} cards | ${newOnPage.length} new | queued: ${totalNew}`);
+        if (pageNum >= 6) break;
         pageNum++;
 
       } catch (err) {
@@ -318,7 +285,7 @@ async function scanForJobs(page, appliedJobs) {
       }
     }
 
-    console.log(`   [ok] "${keyword}": ${totalNew} queued | ${totalOld} >24h skipped`);
+    console.log(`   Done: ${totalNew} queued | ${totalOld} too old`);
   }
 
   _writeScannedJobs(allSeen, new Set(toApply.map(j => j.id)), appliedJobs);
@@ -681,7 +648,7 @@ async function applyToJob(context, job, workerId, jobNumber) {
         'input[name="phone"]', 'input[name="phoneNumber"]',
         'input[name="mobile"]', 'input[id*="phone"]',
         'input[placeholder*="phone" i]', 'input[aria-label*="phone" i]',
-      ], '4088675309', workerId, 'Phone').catch(() => {});
+      ], '7746368916', workerId, 'Phone').catch(() => {});
 
       // Cover letter textarea
       await fillField(jobPage, [
@@ -969,13 +936,6 @@ async function runBot(durationMinutes) {
   const startTime = Date.now();
   const endTime   = durationMinutes != null ? startTime + durationMinutes * 60 * 1000 : Infinity;
 
-  // Verify profile exists
-  if (!fs.existsSync(PROFILE_DIR)) {
-    console.error(`[!] Profile directory not found: ${PROFILE_DIR}`);
-    console.error('    Run "node randstad-bot.js login" first to save your session.');
-    process.exit(1);
-  }
-
   // Verify resume exists
   if (!fs.existsSync(RESUME_PATH)) {
     console.error(`[!] Resume not found at ${RESUME_PATH}`);
@@ -984,21 +944,19 @@ async function runBot(durationMinutes) {
 
   console.log('\n' + '='.repeat(62));
   console.log('Randstad USA Bot — 4 Parallel Workers');
+  console.log(`User     : ${USER_FULL} <${USER_EMAIL}>`);
   console.log(`Duration : ${durationMinutes != null ? durationMinutes + ' min | Stop at: ' + new Date(endTime).toLocaleTimeString() : 'unlimited (test mode)'}`);
-  console.log(`Profile  : ${PROFILE_DIR}`);
   console.log(`Resume   : ${RESUME_PATH}`);
   console.log(`Applied  : ${APPLIED_FILE}`);
-  console.log(`Status   : ${STATUS_FILE}`);
   console.log('='.repeat(62));
 
-  // Launch with persistent profile (carries saved login session)
-  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+  const browser = await chromium.launch({
     headless: false,
-    viewport: { width: 1400, height: 900 },
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      '--no-sandbox',
-    ],
+    args: ['--disable-blink-features=AutomationControlled', '--start-maximized'],
+  });
+  const context = await browser.newContext({
+    viewport: null,
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   });
 
   const scanPage   = await context.newPage();
@@ -1049,18 +1007,10 @@ async function runBot(durationMinutes) {
     // Open failed jobs in browser for review
     const hadFailed = await openFailedJobs(context).catch(() => false);
 
-    if (hadFailed) {
-      console.log('\n[>] Failed/uncertain jobs are open in browser. Review them.');
-      console.log('    Press ENTER when done to close the browser...');
-      const rl2 = readline.createInterface({ input: process.stdin, output: process.stdout });
-      await new Promise(resolve => rl2.question('', () => { rl2.close(); resolve(); }));
-    } else {
-      console.log('\n[i] Browser will stay open for review. Close manually when done.');
-      // Keep process alive briefly so user can see the final state
-      await new Promise(r => setTimeout(r, 5000));
-    }
+    await new Promise(r => setTimeout(r, 3000));
 
-    await context.close().catch(e => console.error('Error closing context:', e.message));
+    await context.close().catch(() => {});
+    await browser.close().catch(() => {});
   }
 
   const ran = Math.floor((Date.now() - startTime) / 60000);
