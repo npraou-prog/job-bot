@@ -27,7 +27,10 @@ const RESUME_PATH     = (() => {
 })();
 const COVER_LETTER_PATH = path.join(__dirname, '..', 'Nikhil_Rao_Cover_Letter.pdf');
 
-const JOBS_LIST_URL  = 'https://careers.strategicstaff.com/jobs/';
+const SCAN_URLS = [
+  'https://careers.strategicstaff.com/',
+  'https://careers.strategicstaff.com/jobs/',
+];
 const NUM_WORKERS    = 2;
 const PAGE_TIMEOUT   = 30000;
 const POST_SUBMIT_WAIT = 6000;
@@ -94,18 +97,13 @@ function isWithin1Day(postedText) {
   return true;
 }
 
-// ─── SCRAPE JOB LISTINGS ─────────────────────────────────────────────────────
+// ─── EXTRACT JOBS FROM PAGE DOM ──────────────────────────────────────────────
 
-async function scrapeJobListings(page) {
-  log(`Scanning ${JOBS_LIST_URL}`);
-  await page.goto(JOBS_LIST_URL, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
-  await page.waitForTimeout(2500);
-
-  const jobs = await page.evaluate(() => {
+function extractJobsFromDOM(page) {
+  return page.evaluate(() => {
     const results = [];
     const seen    = new Set();
-
-    const links = Array.from(document.querySelectorAll('a[href*="/jobs/"]'));
+    const links   = Array.from(document.querySelectorAll('a[href*="/jobs/"]'));
     for (const a of links) {
       const href = (a.href || '').split('?')[0].replace(/\/$/, '') + '/';
       if (!/\/jobs\/[a-z0-9][a-z0-9-]+-\d{4,}\//.test(href)) continue;
@@ -144,9 +142,41 @@ async function scrapeJobListings(page) {
     }
     return results;
   });
+}
 
-  log(`Found ${jobs.length} listing(s)`);
-  return jobs;
+// ─── SCRAPE JOB LISTINGS ─────────────────────────────────────────────────────
+
+async function scrapeJobListings(page) {
+  const allSeen = new Map();
+
+  for (const scanUrl of SCAN_URLS) {
+    log(`Scanning ${scanUrl}`);
+    await page.goto(scanUrl, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
+    await page.waitForTimeout(2500);
+
+    // Click "Load More" up to 4 times
+    for (let i = 0; i < 4; i++) {
+      const loadMoreClicked = await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button, a')).find(el =>
+          /load more|show more|view more/i.test((el.textContent || '').trim()) && el.offsetParent !== null
+        );
+        if (btn) { btn.click(); return true; }
+        return false;
+      }).catch(() => false);
+
+      if (!loadMoreClicked) break;
+      log(`   Clicked Load More (${i + 1}/4)`);
+      await page.waitForTimeout(2000);
+    }
+
+    const jobs = await extractJobsFromDOM(page);
+    log(`   Found ${jobs.length} listing(s) on ${scanUrl}`);
+    jobs.forEach(j => { if (!allSeen.has(j.id)) allSeen.set(j.id, j); });
+  }
+
+  const total = [...allSeen.values()];
+  log(`Total unique listings: ${total.length}`);
+  return total;
 }
 
 // ─── FILL FIELD ───────────────────────────────────────────────────────────────
@@ -292,6 +322,7 @@ async function applyToJob(workerId, context, job) {
 
     // Submit
     const submitSels = [
+      'button:has-text("Apply for this Role")', 'a:has-text("Apply for this Role")',
       'input[type="submit"]', 'button[type="submit"]',
       'button:has-text("Submit")', 'button:has-text("Apply")',
       '.gform_button', '#gform_submit_button_1',
@@ -310,8 +341,8 @@ async function applyToJob(workerId, context, job) {
     }
     if (!submitted) {
       submitted = await jobPage.evaluate(() => {
-        for (const el of document.querySelectorAll('button, input[type="submit"]')) {
-          if (/submit|apply/i.test((el.textContent || el.value || '').trim()) && el.offsetParent !== null) {
+        for (const el of document.querySelectorAll('button, a, input[type="submit"]')) {
+          if (/apply for this role|submit|apply/i.test((el.textContent || el.value || '').trim()) && el.offsetParent !== null) {
             el.click(); return true;
           }
         }
