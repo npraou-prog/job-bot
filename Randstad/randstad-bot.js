@@ -153,8 +153,8 @@ function isWithin24Hours(postedText) {
   if (/\b([3-9]|\d{2,})\s+days?\s+ago\b/i.test(t)) return false;
   if (t.includes('week') || t.includes('month') || t.includes('year')) return false;
 
-  // Absolute date strings "May 8, 2026" etc.
-  const m = t.match(/([a-z]+ \d{1,2},?\s*\d{4})/i);
+  // Absolute date strings "may 6, 2026" / "May 8, 2026" etc.
+  const m = t.match(/([a-z]+\s+\d{1,2},?\s*\d{4})/i);
   if (m) {
     const parsed = new Date(m[1]);
     if (!isNaN(parsed.getTime())) {
@@ -178,28 +178,25 @@ function isWithin24Hours(postedText) {
 async function extractJobsFromPage(page) {
   return page.evaluate((baseUrl) => {
     const map = {};
-
-    // Every anchor pointing to a job detail page pattern: /jobs/{num}/{num}/{slug}/
     const links = Array.from(document.querySelectorAll('a[href*="/jobs/"]'));
 
     for (const a of links) {
       const href = (a.href || '').split('?')[0];
-      // Must match /jobs/{sector-num}/{job-id}/{slug}/
       const m = href.match(/\/jobs\/(\d+)\/(\d+)\/([^/]+)\/?$/);
       if (!m) continue;
       const sectorId = m[1];
       const jobId    = m[2];
       const slug     = m[3];
       const url      = `${baseUrl}/jobs/${sectorId}/${jobId}/${slug}/`;
+      if (map[jobId]) continue;
 
-      if (map[jobId]) continue; // dedup within page
-
-      // Walk up to the card container
+      // Walk up to card — broad selector, fall back to closest div
       const card = a.closest(
-        'article, li, [class*="job"], [class*="result"], [class*="card"], section'
-      );
+        'article, li, [class*="job"], [class*="result"], [class*="card"], ' +
+        '[class*="listing"], [class*="vacancy"], section, div[data-job-id], div[data-id]'
+      ) || a.closest('div') || a.parentElement;
 
-      // Title — prefer h2/h3/h4 inside card, then link text
+      // Title
       let title = '';
       if (card) {
         const heading = card.querySelector('h1, h2, h3, h4, [class*="title"], [class*="name"]');
@@ -207,23 +204,26 @@ async function extractJobsFromPage(page) {
       }
       if (!title) title = a.textContent.trim();
 
-      // Posted date
+      // Date — Randstad uses "posted may 6, 2026" in card text
       let posted = '';
+      const cardText = card ? (card.innerText || '') : '';
+
+      // 1. Try dedicated date element
       if (card) {
-        const dateEl = card.querySelector(
-          '[class*="date"], [class*="posted"], [class*="ago"], time, [datetime]'
-        );
-        if (dateEl) {
-          posted = dateEl.getAttribute('datetime') || dateEl.textContent.trim();
-        }
-        // Fallback: regex scan card text
-        if (!posted) {
-          const cardText = (card.innerText || '');
-          const dm = cardText.match(
-            /(\d+\s+(?:minute|hour|day|week|month)s?\s+ago|today|just now|yesterday|\b[A-Z][a-z]+ \d{1,2},?\s*\d{4})/i
-          );
-          if (dm) posted = dm[0];
-        }
+        const dateEl = card.querySelector('[class*="date"], [class*="posted"], time, [datetime]');
+        if (dateEl) posted = dateEl.getAttribute('datetime') || dateEl.textContent.trim();
+      }
+
+      // 2. "posted [month] [day], [year]" — extract just the date part
+      if (!posted) {
+        const pm = cardText.match(/posted\s+([a-z]+\s+\d{1,2},?\s*\d{4})/i);
+        if (pm) posted = pm[1];
+      }
+
+      // 3. Relative time strings
+      if (!posted) {
+        const rm = cardText.match(/(\d+\s+(?:minute|hour|day|week|month)s?\s+ago|today|just now|yesterday)/i);
+        if (rm) posted = rm[0];
       }
 
       map[jobId] = { id: jobId, sectorId, slug, title, posted, url };
